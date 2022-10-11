@@ -1,0 +1,28 @@
+#!/bin/bash
+
+export self=`id -n -u`
+if [ "${self}" = "root" ]; then
+  printf "# creating /data/ directory hierarchy and installing binaries\n" 1>&2
+  mkdir -p /data/bin /data/scripts /data/genomes /data/parasol/nodeInfo
+  chmod 777 /data /data/genomes /data/parasol /data/parasol/nodeInfo
+  chmod 755 /data/bin /data/scripts
+  rsync -a rsync://hgdownload.soe.ucsc.edu/genome/admin/exe/linux.x86_64/ /data/bin/
+  yum -y install wget
+  wget -qO /data/parasol/nodeInfo/nodeReport.sh 'http://genomewiki.ucsc.edu/images/e/e3/NodeReport.sh.txt'
+  chmod 755 /data/parasol/nodeInfo/nodeReport.sh
+  wget -qO /data/parasol/initParasol 'http://genomewiki.ucsc.edu/images/4/4f/InitParasol.sh.txt'
+  chmod 755 /data/parasol/initParasol
+  git archive --remote=git://genome-source.soe.ucsc.edu/kent.git \
+      --prefix=kent/ HEAD src/hg/utils/automation \
+        | tar vxf - -C /data/scripts --strip-components=5 \
+      --exclude='kent/src/hg/utils/automation/incidentDb' \
+      --exclude='kent/src/hg/utils/automation/configFiles' \
+      --exclude='kent/src/hg/utils/automation/ensGene' \
+      --exclude='kent/src/hg/utils/automation/genbank' \
+      --exclude='kent/src/hg/utils/automation/lastz_D' \
+      --exclude='kent/src/hg/utils/automation/openStack'
+else
+  printf "ERROR: need to run this script as sudo ./parasolInstall.sh\n" 1>&2
+fi
+
+

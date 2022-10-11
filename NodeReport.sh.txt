@@ -1,0 +1,30 @@
+#!/bin/bash
+#
+# construct .ms file from this node for parasol hub controller
+#
+if [ $# -ne 2 ]; then
+  printf "usage: nodeReport.sh N nodeInfoDir
+where N is the number of CPUs to reserve outside parasol processes
+use N=0 for a fully dedicated parasol node machine to use all CPUs
+use N=2 for a shared computer to reserve 2 CPUs for OS and
+  the parasol hub process.
+and 'nodeInfoDir' is the directory to write the result file into
+e.g.:  nodeReport 2 /data/parasol/nodeInfo
+reserves 2 CPUs and writes the result file to:
+  /data/parasol/nodeInfo/<ipAddr>.ms
+where <ipAddr> is the internal LAN address of this machine
+NOTE: works only on Linux, does not function correctly on Mac OSX\n" 1>&2
+  exit 255
+fi
+reserveCPUs=$1
+nodeInfoDir=$2
+myIp=`/usr/sbin/ip addr show | egrep "inet.*eth0|inet.*em1" | awk '{print $2}' | sed -e 's#/.*##;'`
+memSizeMb=`grep -w MemTotal /proc/meminfo  | awk '{print 1024*(1+int($2/(1024*1024)))}'`
+cpuCount=`grep processor /proc/cpuinfo | wc -l`
+useCPUs=$(expr $cpuCount - $reserveCPUs)
+if [ "${useCPUs}" -lt 1 ]; then
+useCPUs=1
+fi
+memTotal=`echo $memSizeMb $cpuCount | awk '{printf "%d", $1, $2}'`
+devShm=`df -k /dev/shm | grep dev/shm | awk '{printf "%d\n", 512*(1+int($2/(1024*1024)))}'`
+printf "%s\t%d\t%d\t/dev/shm\t/dev/shm\t%s\tbsw\n" "${myIp}" "${useCPUs}" "${memTotal}" "${devShm}" > "${nodeInfoDir}"/${myIp}.ms

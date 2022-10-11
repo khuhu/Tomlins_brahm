@@ -1,0 +1,213 @@
+---
+title: "Creating Mouse Panel"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+#### So this is a script into how I made the Comprehensive Mouse panel describing each of the steps along the way.
+#### Most steps are noted, but some are just described here
+
+
+
+##### Loadign in the necessary libraries, functions and databases
+```{r setup2_libraries}
+
+source("/home/kevhu/scripts/fastReadFile.R")
+library(stringr)
+library(org.Hs.eg.db)
+library(GenomicFeatures)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(readxl)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(biomaRt)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(AnnotationHub)
+library(Biostrings)
+library(GenomicRanges)
+library(ensembldb)
+library(EnsDb.Mmusculus.v79)
+library(EnsDb.Hsapiens.v86)
+
+
+ah <- AnnotationHub()
+edb <- ah[["AH64944"]]
+
+# function here is for quickly converting human gene symbols to mouse gene symbols - though it seems most mouse gene smybols are just lowercase versions of their human ones
+
+convertHumanGeneList <- function(x){
+  
+  require("biomaRt")
+  human = useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+  mouse = useMart("ensembl", dataset = "mmusculus_gene_ensembl")
+  
+  genesV2 = getLDS(attributes = c("hgnc_symbol"), filters = "hgnc_symbol", values = x , mart = human, attributesL = c("mgi_symbol"), martL = mouse, uniqueRows=T)
+  return(genesV2)
+}
+
+```
+
+##### So inital way to get genes to target for the mouse panel is to grab gene lists from contemporary targeted panels i.e oncomineV3 and MSK-IMPACT
+
+
+```{r pressure, echo=FALSE}
+
+ccpOncominev3 <- as.character(unlist(read.table("/home/kevhu/data/oncomineV3")))
+mskGeneList <- read_xlsx("/home/kevhu/data/mskImpactGeneListSuppTab4.xlsx", skip = 2)
+mskGeneList2 <- unique(mskGeneList$Gene)
+
+mskHotspots <- read.table("/home/kevhu/data/hotspots_msk.txt",sep = "\t", header = TRUE, stringsAsFactors = FALSE)
+
+tumorSupressors <- c("TP53","RB1", "WT1", "NF1", "NF2", "APC", "TSC1", "TSC2", "SMAD4",
+                     "BRCA1","BRCA2", "PTEN", "STK11", "MSH2", "MLH1", "CDH1", 
+                     "VHL", "CDKN2A", "PTCH1", "MEN1")
+
+tumorSupressors[which(tumorSupressors %in% mskGeneList2)]
+combinedGenesList <- unique(c(mskGeneList2, ccpOncominev3))
+mouseCancerGenes <- convertHumanGeneList(combinedGenesList)
+
+### maede list of conversions not done by the database utilized by the function
+googledConversions <- c("H3f3a", "Cdkn2a", "Xiap", "Amer1", "P21", "Bbc3", "Kmt2d", 
+                        "Kmt2a", "Mre11a", "Gnaq", "Kmt2c", "Prkn", "Notch4", "Hist1h3b",
+                        "Npm1", "Abraxas1", "Cop1", "Tent5c", "Mycl")
+
+tmp1 <- combinedGenesList[-which(combinedGenesList %in% mouseCancerGenes$HGNC.symbol)]
+tmp1 <- tmp1[-which(tmp1 == "-")]
+
+### order is a bit swapped so needed to fix it
+tmp2 <- cbind(tmp1, rev(googledConversions))
+colnames(tmp2) <- colnames(mouseCancerGenes)
+mouseCancerGenesV2 <- rbind(mouseCancerGenes, tmp2)
+mouseCancerGenesV3 <- mouseCancerGenesV2[!duplicated(mouseCancerGenesV2$HGNC.symbol),]
+googleSet2 <- mouseCancerGenesV2[duplicated(mouseCancerGenesV2$HGNC.symbol),]
+mouseCancerGenesV3$MGI.symbol[which(mouseCancerGenesV3$HGNC.symbol == "MYC")] <- "Myc"
+mouseCancerGenesV3$MGI.symbol[which(mouseCancerGenesV3$HGNC.symbol == "SPOP")] <- "Spop"
+mouseCancerGenesV3$MGI.symbol[which(mouseCancerGenesV3$HGNC.symbol == "EIF1AX")] <- "Eif1ax"
+mouseCancerGenesV3$MGI.symbol[which(mouseCancerGenesV3$HGNC.symbol == "MYCN")] <- "Mycn"
+mouseCancerGenesV3$MGI.symbol[which(mouseCancerGenesV3$HGNC.symbol == "PMS2")] <-"Pms2"
+
+```
+
+##### After getting the different gene lists from panels, I looked for cancer hotspots through COSMIC and oncotarget (MSK) - loading COSMIC table and only keeping hotspots found in both. Hashed out code are data tables are made of the mutation data. 
+
+```{r hotspot_filtering}
+cosmicTable <- faster.readfile(x = "/home/kevhu/data/CosmicMutantExport.tsv", y= 0,sep = '\t')
+cosmicTable2 <- cosmicTable[-which(cosmicTable$Mutation_genome_position == ""),]
+cosmicTableAAsubset <- cosmicTable2$Mutation_AA
+cosmicTableAAsubset <- str_remove_all(cosmicTableAAsubset, "p\\.*")
+cosmicTableAAsubset <- gsub(".{1}$", "", cosmicTableAAsubset)
+tableToMatch <- paste0(cosmicTable2$Gene_name, cosmicTableAAsubset)
+keysToMatch <- paste0(mskHotspots$Gene, mskHotspots$Residue)
+
+
+cosmicTable3 <- cosmicTable2[match(keysToMatch, tableToMatch),]
+
+mskHotspots$GenomicLocation <- cosmicTable3$Mutation_genome_position
+mskHotspots$MutStrand <- cosmicTable3$Mutation_strand_SNP
+mskHotspots$cosmicID <- cosmicTable3$Mutation_ID
+mskHotspots.Cosmic <- mskHotspots[-which(is.na(cosmicTable3$Gene_name)),]
+
+#write.table(mskHotspots.Cosmic,"/home/kevhu/data/20190201mouseHotspots.txt",
+#            row.names = FALSE, col.names = TRUE, quote = FALSE, sep = "\t")
+```
+
+##### Just more steps for filtering to the final list targeted by panel
+```{r hotspot_filtering2}
+
+### adding annotations for the targets
+targetAnno <- rep("Oncogene", nrow(mouseCancerGenesV3))
+targetAnno[which(mouseCancerGenesV3$HGNC.symbol %in% tumorSupressors)] <- "TumorSupressorGene"
+mouseCancerGenesV3$Annotation <- targetAnno
+annotatedAmplicon <- rep("CopyNumber", nrow(mouseCancerGenesV3))
+annotatedAmplicon[which(mouseCancerGenesV3$HGNC.symbol %in% unique(mskHotspots.Cosmic$Gene))] <- "CopyNumber/Hotspot"
+annotatedAmplicon[which(toupper(mouseCancerGenesV3$MGI.symbol) %in% unique(mskHotspots.Cosmic$Gene))] <- "CopyNumber/Hotspot"
+annotatedAmplicon[which(mouseCancerGenesV3$HGNC.symbol %in% tumorSupressors)] <- "AllExons"
+mouseCancerGenesV3$ampliconPurpose <- annotatedAmplicon
+
+#write.table(mouseCancerGenesV3,"/home/kevhu/data/20190129preliminaryMousePanelListCosmic.txt", sep = "\t", col.names = TRUE, row.names = FALSE,
+#            quote = FALSE)
+
+```
+
+
+##### The next few steps are for deciding where in the mouse genome these hotspots lie in. I.e find conversion of these hotspots from human to mouse. I recall trying to use liftOver - from hg38 to mm10. There are chainfiles made for this purpose on UCSC. Generally these are done for larger regions and within a species, so unsurprisingly when tested these things failed. One approach I tried was to BLAST but that didn't yield too much - even tried it with polypeptide patterns surrrounding the hotspot; also was hard to figure out which of the many annnotations of the proteins to use. After a bit of reading, decided to have take canonical proteins - not sure why this wasn't obvious to me in the beggining. List taken from uniprot 
+
+```{r}
+### read in the table of canonical proteins and then reduce the list to ones of TSG since oncogenes are fully tiled in the design of the panel
+
+uniProtCanonical <- read.table("/home/kevhu/data/uniprotCanonicalList.txt", skip = 1, header = FALSE,
+                               stringsAsFactors = FALSE, sep = "\t")
+tmpTable <- mouseCancerGenesV3
+tmpTable$uniProt <- uniProtCanonical$V2[match(mouseCancerGenesV3$HGNC.symbol, uniProtCanonical$V1)]
+
+tmpTable$HGNC.symbol[which(is.na(tmpTable$uniProt))]
+tmpTable$uniProt[22] <- "P12524"
+tmpTable$uniProt[305] <- "P46100"
+tmpTable$uniProt[351] <- "Q6UWZ7"
+tmpTable <- tmpTable[-348,]
+
+tmpTable$uniProt[which(tmpTable$ampliconPurpose == "CopyNumber/Hotspot")]
+
+matchIdxTmp <- NULL
+for(i in tmpTable$uniProt[which(tmpTable$ampliconPurpose == "CopyNumber/Hotspot")]){
+  print(i)
+  a <- which(grepl(i, blast.res$queryID))
+  matchIdxTmp <- c(matchIdxTmp, a)
+}
+
+
+```
+
+
+##### Updating annotations of some genes
+```{r}
+
+### changing some of the labels and changing classification of oncogenes into TSGs
+mouseCancerGenesV4 <- mouseCancerGenesV3
+mouseCancerGenesV4$ampliconPurpose[which(mouseCancerGenesV4$ampliconPurpose == 'AllExons')] <- "CDS"
+oncoToTsg <- c("Smad2", "Tgfbr2", "Arid1a", "Sox9", "Chek2", "Pms1", "Pms2", "Notch1", "Pole", "Axin1")
+
+mouseCancerGenesV4$ampliconPurpose[which(mouseCancerGenesV4$MGI.symbol %in% oncoToTsg)] <- "CDS"
+mouseCancerGenesV4$Annotation[which(mouseCancerGenesV4$MGI.symbol %in% oncoToTsg)] <- "TumorSupressorGene"
+
+### adding other tsgs not on mouse list
+tsg.hgnc <- c("DCC", "CYLD", "PTCH2")
+tsg.mgi <- c("Dcc", "Cyld", "Ptch2")
+tsg.purpose <- rep("CDS",3)
+tsg.anno <- rep("TumorSurpressorGene", 3)
+tsg.tmp <- cbind(tsg.hgnc, tsg.mgi, tsg.anno, tsg.purpose)
+colnames(tsg.tmp) <- colnames(mouseCancerGenesV4)
+mouseCancerGenesV4 <- rbind(mouseCancerGenesV4, tsg.tmp)
+
+### same for oncogenes
+mouseCancerGenesV4 <- rbind(mouseCancerGenesV4, c("GLI1", "Gli1", "TumorSupressorGene", "CDS"))
+
+
+
+### now I filter out the cosmic list by only oncogenes -> helps reduce amount of things not found from blast results 
+### copying code from above so I can just blast using the smaller list
+mouseHotspotGenes <- mouseCancerGenesV4$HGNC.symbol[which(mouseCancerGenesV4$ampliconPurpose == "CopyNumber/Hotspot")]
+mskHotspots.Cosmic.onlyOncogenes <- mskHotspots.Cosmic[which(mskHotspots.Cosmic$Gene %in% mouseHotspotGenes),]
+
+```
+
+
+##### looking at polypeptides of proteins
+```{r}
+
+#### need to check if I need to load any of these files below to get same results .... ?
+uniProtCanonical <- read.table("/home/kevhu/data/20190214wholeCanonicalMouseProt.txt", skip = 1, header = FALSE,
+                               stringsAsFactors = FALSE, sep = "\t")
+load("/home/kevhu/data/20190214mskHotspots.onlyOnco.df.Robj")
+mouseCancerGenesV4 <- read.table("/home/kevhu/data/20190214mouseCancerGenesV4.txt", header = TRUE,
+                                 stringsAsFactors = FALSE, sep = "\t")
+
+matchedVars <- mskHotspots.Cosmic.onlyOncogenes$Residue[match(uniProtCanonical$V1, mskHotspots.Cosmic.onlyOncogenes$Gene)]
+uniProtCanonical$residueLocation <- matchedVars
+
+```
+
